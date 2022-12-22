@@ -1,0 +1,12 @@
+{
+  "ignore": [
+    "yarn.lock",
+    "yarn-error.log",
+    "package-lock.json",
+    "node_modules",
+    "*.md",
+    ".eslintrc.json",
+    "/.vscode"
+  ],
+  "ext": ".js, .json, .yaml, .html, .css"
+}
