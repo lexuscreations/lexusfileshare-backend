@@ -68,6 +68,20 @@ IO.on("connection", (socket) => {
     });
   });
 
+  socket.on(
+    "sender-requestToCheck-isSharingEnabled-isRoomCreated-isInTheRoomAlready",
+    (data) => {
+      IO.to(socket.id).emit(
+        "sender-responseToCheck-isSharingEnabled-isRoomCreated-isInTheRoomAlready",
+        {
+          isSharingEnabled: socketConnectedRooms[data.sender_uid]
+            ? true
+            : false,
+        }
+      );
+    }
+  );
+
   socket.on("file-meta", (data) => {
     socket.in(data.sender_uid).emit("fs-meta", data.metadata);
   });
@@ -141,11 +155,11 @@ IO.on("connection", (socket) => {
                 "receiver-disconnected-from-the-room",
                 { receiverID }
               );
-              if (receiversArr.length === 1) {
-                delete socketConnectedRooms[roomID];
-              } else {
-                delete socketConnectedRooms[roomID].receivers[receiverID];
-              }
+              // if (receiversArr.length === 1) {
+              // delete socketConnectedRooms[roomID];
+              // } else {
+              delete socketConnectedRooms[roomID].receivers[receiverID];
+              // }
             }
           });
         }
