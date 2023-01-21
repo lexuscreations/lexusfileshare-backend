@@ -11,8 +11,17 @@ const socketConnectedRequestTempObj = {};
 
 IO.on("connection", (socket) => {
   socket.on("sender-join", (data) => {
+    if (
+      socketConnectedRooms[data.uid] &&
+      socketConnectedRooms[data.uid].sender_socketId !== socket.id
+    ) {
+      return IO.to(socket.id).emit("sender-already-joined-with-same-UUID", {
+        justOnlyShowToast: false,
+        isThisEnableSharingRequest: true,
+      });
+    }
+
     socketConnectedRooms[data.uid] = {
-      sender_uid: data.uid,
       sender_socketId: socket.id,
       receivers: {},
     };
@@ -37,11 +46,21 @@ IO.on("connection", (socket) => {
     if (socketConnectedRooms[data.receiverID])
       return IO.to(socket.id).emit("receiver-sender-UUID-can_not-be-same");
 
+    if (
+      Object.keys(
+        socketConnectedRequestTempObj[data.sender_uid].receivers
+      ).filter((key) => key === data.receiverID).length > 0
+    )
+      return IO.to(socket.id).emit(
+        "receiver-one-previous-request-is-already-in-pending-state"
+      );
+
     IO.to(socket.id).emit("joining-request-sent-confirmation");
 
-    socketConnectedRequestTempObj[data.sender_uid].receivers[socket.id] = {
-      receiverID: data.receiverID,
-    };
+    socketConnectedRequestTempObj[data.sender_uid].receivers[data.receiverID] =
+      {
+        receiver_socketId: socket.id,
+      };
 
     IO.to(socketConnectedRooms[data.sender_uid].sender_socketId).emit(
       "receiver-joining-request",
@@ -58,7 +77,7 @@ IO.on("connection", (socket) => {
       sender_uid: data.sender_uid,
     });
     delete socketConnectedRequestTempObj[data.sender_uid].receivers[
-      data.receiver_socketId
+      data.receiverID
     ];
   });
 
@@ -66,28 +85,44 @@ IO.on("connection", (socket) => {
     IO.to(data.receiver_socketId).emit("receiver-joining-decline", {
       sender_uid: data.sender_uid,
     });
+    delete socketConnectedRequestTempObj[data.sender_uid].receivers[
+      data.receiverID
+    ];
   });
 
   socket.on(
     "sender-requestToCheck-isSharingEnabled-isRoomCreated-isInTheRoomAlready",
     (data) => {
+      if (
+        socketConnectedRooms[data.sender_uid] &&
+        socketConnectedRooms[data.sender_uid].sender_socketId !== socket.id
+      )
+        return IO.to(socket.id).emit("sender-already-joined-with-same-UUID", {
+          justOnlyShowToast: data.justOnlyShowToast,
+        });
+
       IO.to(socket.id).emit(
         "sender-responseToCheck-isSharingEnabled-isRoomCreated-isInTheRoomAlready",
         {
-          isSharingEnabled: socketConnectedRooms[data.sender_uid]
-            ? true
-            : false,
+          isSharingEnabled: !!socketConnectedRooms[data.sender_uid],
+          isThisEnableSharingRequest: data.isThisEnableSharingRequest,
         }
       );
     }
   );
 
   socket.on("file-meta", (data) => {
-    socket.in(data.sender_uid).emit("fs-meta", data.metadata);
+    IO.to(
+      socketConnectedRooms[data.sender_uid].receivers[data.receiverID]
+        .receiver_socketId
+    ).emit("fs-meta", data.metadata);
   });
 
   socket.on("fs-start", (data) => {
-    socket.in(data.sender_uid).emit("fs-share");
+    IO.to(socketConnectedRooms[data.sender_uid].sender_socketId).emit(
+      "fs-share",
+      { receiverID: data.receiverID }
+    );
   });
 
   socket.on("file-raw", (data) => {
@@ -99,23 +134,30 @@ IO.on("connection", (socket) => {
 
   socket.on("disconnect", () => {
     let flag = false;
-    Object.keys(socketConnectedRequestTempObj).forEach((tempRoomID) => {
-      if (socketConnectedRequestTempObj[tempRoomID].receivers[socket.id]) {
-        // receiver which not approved by sender that receiver disconnected, checking for each receiver in each room
-        if (socketConnectedRooms[tempRoomID]) {
-          IO.to(socketConnectedRooms[tempRoomID].sender_socketId).emit(
-            "receiver-disconnect-during-sender-request-approval",
-            {
-              receiverID:
-                socketConnectedRequestTempObj[tempRoomID].receivers[socket.id]
-                  .receiverID,
+    Object.keys(socketConnectedRequestTempObj).forEach(
+      (tempRoomID__aka_senderID) => {
+        Object.keys(
+          socketConnectedRequestTempObj[tempRoomID__aka_senderID].receivers
+        ).forEach((tempObj__receiverID) => {
+          if (
+            socketConnectedRequestTempObj[tempRoomID__aka_senderID].receivers[
+              tempObj__receiverID
+            ].receiver_socketId === socket.id
+          ) {
+            if (socketConnectedRooms[tempRoomID__aka_senderID]) {
+              IO.to(
+                socketConnectedRooms[tempRoomID__aka_senderID].sender_socketId
+              ).emit("receiver-disconnect-during-sender-request-approval", {
+                receiverID: tempObj__receiverID,
+              });
             }
-          );
-        }
-        delete socketConnectedRequestTempObj[tempRoomID].receivers[socket.id];
-        flag = true;
+            delete socketConnectedRequestTempObj[tempRoomID__aka_senderID]
+              .receivers[tempObj__receiverID];
+            flag = true;
+          }
+        });
       }
-    });
+    );
 
     if (flag) return;
 
@@ -131,22 +173,22 @@ IO.on("connection", (socket) => {
           }
         );
         Object.keys(socketConnectedRequestTempObj[roomID].receivers).forEach(
-          (receiverSID) => {
-            IO.to(receiverSID).emit(
-              "sender-disconnect-during-receiver-request-approval",
-              { sender_uid: roomID }
-            );
+          (receiverID) => {
+            IO.to(
+              socketConnectedRequestTempObj[roomID].receivers[receiverID]
+                .receiver_socketId
+            ).emit("sender-disconnect-during-receiver-request-approval", {
+              sender_uid: roomID,
+            });
           }
         );
         delete socketConnectedRequestTempObj[roomID];
         delete socketConnectedRooms[roomID];
+        IO.in(roomID).socketsLeave(roomID);
       } else {
         // checking which receiver disconnect in each room, in outer loop
-        const receiversArr = Object.keys(
-          socketConnectedRooms[roomID].receivers
-        );
-        if (receiversArr.length) {
-          receiversArr.forEach((receiverID) => {
+        Object.keys(socketConnectedRooms[roomID].receivers).forEach(
+          (receiverID) => {
             if (
               socketConnectedRooms[roomID].receivers[receiverID]
                 .receiver_socketId === socket.id
@@ -155,14 +197,10 @@ IO.on("connection", (socket) => {
                 "receiver-disconnected-from-the-room",
                 { receiverID }
               );
-              // if (receiversArr.length === 1) {
-              // delete socketConnectedRooms[roomID];
-              // } else {
               delete socketConnectedRooms[roomID].receivers[receiverID];
-              // }
             }
-          });
-        }
+          }
+        );
       }
     });
   });
